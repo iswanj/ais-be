@@ -35,41 +35,25 @@ Node.js, TypeScript, and Fastify serve the API. A single long-lived WebSocket co
 2. Send a complete subscription within 3 seconds, including the server-side API key, configured geographic bounding boxes, and `FilterMessageTypes: ["PositionReport"]`. The provider subscription uses **latitude, longitude** corner pairs; the client API uses **longitude, latitude** bounding-box values.
 3. Read and decode WebSocket frames continuously. Ignore subscription confirmations and other message types.
 4. For each `PositionReport`, validate the MMSI, `Valid` flag, finite latitude and longitude, and coordinate ranges. Read COG and SOG when valid; treat unavailable course as unknown rather than inventing a direction. Use the envelope's ship name when supplied.
-5. Record `received_at` as the UTC time the backend receives the valid message and upsert the latest row immediately. The AIS report's `Timestamp` is a second within a minute and is not a full event timestamp for freshness checks.
+5. Record `received_at` as the UTC time the backend receives the valid message and upsert the latest row through a short, coalescing write batch. The AIS report's `Timestamp` is a second within a minute and is not a full event timestamp for freshness checks.
 6. Reconnect with exponential backoff and jitter after disconnection, then send a new complete subscription. Log connection state and ingestion errors without exposing the API key.
 
 The provider does not promise durable replay. A restart retains rows already committed to PostgreSQL; rows older than 2 minutes remain stored but are excluded from the live API until new reports arrive.
 
 ### Database
 
-Use a small current-state table for viewport reads:
+Run [`database/001_init.sql`](../database/001_init.sql) and then [`database/002_retention_index.sql`](../database/002_retention_index.sql). They install PostGIS in the `gis` schema, create `app.vessel_latest` with a GiST index on its point location, and add a retention index. The `app` schema is not exposed through Supabase's Data API by default, and RLS is enabled without anon/authenticated policies. Clients access data only through Fastify.
 
-```sql
-CREATE EXTENSION IF NOT EXISTS postgis;
-
-CREATE TABLE vessel_latest (
-  mmsi BIGINT PRIMARY KEY,
-  name TEXT,
-  location GEOMETRY(Point, 4326) NOT NULL,
-  sog REAL,
-  cog REAL,
-  received_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX vessel_latest_location_gist
-  ON vessel_latest USING GIST (location);
-```
-
-Construct points as `ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)`. Upsert by MMSI. Keep coordinates and `received_at` in the same committed update so a viewport request sees a consistent latest position. A separate append-only history table can be introduced later if trajectories become a requirement.
+Construct points as `gis.ST_SetSRID(gis.ST_MakePoint(longitude, latitude), 4326)`. Upsert by MMSI. Keep coordinates and `received_at` in the same committed update so a viewport request sees a consistent latest position. A separate append-only history table can be introduced later if trajectories become a requirement.
 
 ### API contract
 
-`GET /api/vessels?bbox=minLng,minLat,maxLng,maxLat&zoom=12.5`
+`GET /api/vessels?bbox=minLng,minLat,maxLng,maxLat`
 
 - `bbox` contains the visible map bounds in longitude, latitude order.
-- Validate numeric values, latitude/longitude ranges, latitude ordering, and a plausible viewport size. A box crossing the antimeridian (`minLng > maxLng`) is split into two spatial queries.
-- Return an empty `data` array when `zoom < 12`. The client also suppresses fetching and clears markers below zoom 12.
-- Query only `received_at >= NOW() - INTERVAL '2 minutes'` and locations intersecting the requested viewport. Use `ST_Intersects(location, ST_MakeEnvelope(..., 4326))` with the GiST index.
+- Validate numeric values, latitude/longitude ranges, latitude ordering, and a maximum 10-degree span in each direction. A box crossing the antimeridian (`minLng > maxLng`) is split into two spatial queries.
+- The API has no zoom parameter. The client suppresses fetching and clears markers below zoom 12.
+- Query `app.vessel_latest` for only `received_at >= NOW() - INTERVAL '2 minutes'` and locations intersecting the requested viewport. Use `gis.ST_Intersects(location, gis.ST_MakeEnvelope(..., 4326))` with the GiST index.
 - Return one item per MMSI. `course` is COG in degrees, or `null` when unavailable.
 
 Example response:
@@ -90,7 +74,7 @@ Example response:
 }
 ```
 
-`GET /health` provides a basic liveness response. Log or expose separate ingestion and database status for operations so a running HTTP server does not hide a disconnected feed.
+`GET /health` provides a basic liveness response. Connection, queue, and database failures are logged so a running HTTP server does not hide a disconnected feed.
 
 ## Mobile integration contract
 
@@ -101,9 +85,21 @@ A five-second polling interval leaves limited margin for network and rendering t
 ## Deployment and scaling
 
 - Use persistent PostgreSQL/PostGIS storage and an always-on backend process for the final demonstration. A sleeping web service cannot reliably meet the 10-second update target or maintain the ingestion connection.
+- For Render to Supabase, use the Supabase **Session pooler** connection string on port 5432 as `DATABASE_URL`. Render's outbound network is IPv4-only, while Supabase's direct connection is IPv6 unless its IPv4 add-on is enabled. Keep the URL in Render environment variables, never in source control.
 - Start with one API/ingestion instance and a bounded database connection pool. Do not create one provider connection per viewer.
 - Each viewer requests only its current viewport. Debounce map movement and avoid requests below zoom 12. Measure API and database load with roughly 30,000 latest rows and several concurrent viewers before adding caching or delta responses.
 - Store `AISSTREAM_API_KEY`, `AIS_BOUNDING_BOXES`, `DATABASE_URL`, and `PORT` as backend configuration. The client needs only the public API URL and its Mapbox token.
+
+## Run and maintain the backend
+
+1. Run `yarn install --frozen-lockfile`.
+2. In the Supabase SQL Editor, run `database/001_init.sql`, then `database/002_retention_index.sql`. Run the second migration even if the first was applied previously.
+3. Copy `.env.example` to `.env` and replace the example values. `AIS_BOUNDING_BOXES` is JSON with AISstream latitude/longitude corner pairs. Use the Supabase Session pooler URL for `DATABASE_URL`.
+4. Run `yarn dev` for automatic restarts during development. `GET /health` checks HTTP liveness; `GET /api/vessels?bbox=-80.3,25.6,-79.8,25.9` returns fresh positions in that viewport.
+5. Run `yarn typecheck`, `yarn test`, and `yarn build` before deployment. The PostGIS test requires `TEST_DATABASE_URL` pointing to an **empty disposable database** with the two SQL migrations applied; it is skipped when that variable is absent.
+6. On Render, use `yarn install --frozen-lockfile && yarn build` as the build command and `yarn start` as the start command. Configure one always-on instance and set the same backend environment variables in Render.
+
+The app fails startup if the required settings are missing, the database is unreachable, or `app.vessel_latest` has not been created. `/health` is a liveness check; inspect connection and write-delay logs to diagnose ingestion health. AISstream does not replay reports missed while disconnected.
 
 ## Delivery and acceptance checks
 

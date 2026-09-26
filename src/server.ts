@@ -1,10 +1,65 @@
+import 'dotenv/config';
+import { AisStreamClient } from './ais/stream-client.js';
+import { BatchWriter } from './ais/batch-writer.js';
 import { buildApp } from './app.js';
+import { loadConfig } from './config/env.js';
+import { createPool } from './db/pool.js';
+import { PostgresVesselStore } from './vessels/repository.js';
 
-const app = buildApp();
+async function main(): Promise<void> {
+  const config = loadConfig();
+  const pool = createPool(config.databaseUrl);
+  const store = new PostgresVesselStore(pool);
+  const app = buildApp(store);
+  pool.on('error', (error) => app.log.error({ err: error }, 'idle database client error'));
 
-const port = Number(process.env.PORT ?? 3000);
+  try {
+    await pool.query('SELECT mmsi FROM app.vessel_latest LIMIT 0');
+    await app.listen({ host: '0.0.0.0', port: config.port });
+  } catch (error) {
+    app.log.error({ err: error }, 'startup failed');
+    await app.close();
+    await pool.end();
+    throw error;
+  }
 
-app.listen({ host: '0.0.0.0', port }).catch((error: unknown) => {
-  app.log.error(error);
-  process.exit(1);
+  const writer = new BatchWriter(store, app.log);
+  const stream = new AisStreamClient(config.aisstreamApiKey, config.aisBoundingBoxes, writer, app.log);
+  writer.start();
+  stream.start();
+
+  const cleanup = async () => {
+    try {
+      const deleted = await store.deleteOlderThan(new Date(Date.now() - 60 * 60 * 1_000));
+      if (deleted > 0) app.log.info({ deleted }, 'removed old vessel positions');
+    } catch (error) {
+      app.log.error({ err: error }, 'vessel cleanup failed');
+    }
+  };
+  const cleanupTimer = setInterval(() => { void cleanup(); }, 15 * 60 * 1_000);
+  void cleanup();
+
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearInterval(cleanupTimer);
+    await stream.stop();
+    await writer.stop();
+    await app.close();
+    await pool.end();
+  };
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      void shutdown().catch((error: unknown) => {
+        app.log.error({ err: error }, 'shutdown failed');
+        process.exitCode = 1;
+      });
+    });
+  }
+}
+
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
 });
