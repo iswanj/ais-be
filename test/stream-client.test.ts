@@ -13,6 +13,7 @@ test('subscribes, accepts positions, and reconnects after a close', async () => 
   if (typeof address === 'string' || !address) throw new Error('mock server has no port');
   const positions: VesselPosition[] = [];
   const saved: VesselPosition[] = [];
+  const latest = new Map<number, VesselPosition>();
   const subscriptions: unknown[] = [];
   let connections = 0;
   server.on('connection', (socket) => {
@@ -29,9 +30,13 @@ test('subscribes, accepts positions, and reconnects after a close', async () => 
     });
   });
   const store: VesselStore = {
-    async upsertBatch(batch) { saved.push(...batch); },
-    async listInViewport() { return saved; },
-    async deleteOlderThan() { return 0; },
+    async persistBatch(batch) {
+      saved.push(...batch);
+      for (const report of batch) latest.set(report.mmsi, report);
+    },
+    async listInViewport() {
+      return [...latest.values()];
+    },
   };
   const app = buildApp(store);
   const writer = new BatchWriter(store, app.log);
@@ -43,7 +48,7 @@ test('subscribes, accepts positions, and reconnects after a close', async () => 
     writer.start();
     client.start();
     await waitUntil(() => subscriptions.length === 2 && positions.length === 2, 2_000);
-    await waitUntil(() => saved.length > 0, 1_000);
+    await waitUntil(() => saved.length === 2, 1_000);
     assert.deepEqual(subscriptions[0], {
       APIKey: 'test-key', BoundingBoxes: [[[2, 1], [0, 3]]], FilterMessageTypes: ['PositionReport'],
     });
@@ -52,6 +57,7 @@ test('subscribes, accepts positions, and reconnects after a close', async () => 
     const response = await app.inject('/api/vessels?bbox=1,0,3,2');
     assert.equal(response.statusCode, 200);
     assert.equal(response.json().data[0]?.mmsi, 123456789);
+    assert.equal(response.json().data.length, 1);
     assert.ok(Date.now() - saved[0]!.receivedAt.getTime() < 1_000, 'stream-to-API delay exceeded one second');
   } finally {
     await client.stop();

@@ -16,7 +16,6 @@ export interface Viewport {
 }
 
 export interface VesselStore {
-  upsertBatch(positions: VesselPosition[]): Promise<void>;
+  persistBatch(reports: VesselPosition[]): Promise<void>;
   listInViewport(viewport: Viewport): Promise<VesselPosition[]>;
-  deleteOlderThan(cutoff: Date): Promise<number>;
 }

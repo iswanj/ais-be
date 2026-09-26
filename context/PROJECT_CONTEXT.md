@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build the backend for an AIS vessel viewer that consumes `PositionReport` messages from aisstream.io, persists the latest vessel positions in PostGIS, and serves fresh positions inside a mobile map viewport. A React Native client using Mapbox Maps SDK will poll the API and display directional vessel markers.
+Build the backend for an AIS vessel viewer that consumes `PositionReport` messages from aisstream.io, persists the latest position per vessel in PostGIS, and serves fresh positions inside a mobile map viewport. A React Native client using Mapbox Maps SDK will poll the API and display directional vessel markers.
 
 The challenge prioritizes a simple implementation that remains useful with approximately 30,000 vessels and many simultaneous map viewers. A report received by the backend should appear on an active map within 10 seconds. The map must never show positions older than 2 minutes and must show vessels only at zoom level 12 or higher.
 
@@ -15,14 +15,15 @@ The challenge prioritizes a simple implementation that remains useful with appro
 - Recover the stream connection after interruptions without losing already persisted positions.
 - Support a demonstration of ingestion, map updates, freshness, and persistence after a backend restart.
 
-Twenty-four-hour trajectory storage, vessel type, flag, and vessel detail history are outside the MVP. Add them only after the challenge requirements work end to end. `PositionReport` and its envelope do not supply all static vessel metadata.
+Vessel type, flag, and static vessel details are outside the MVP. `PositionReport` and its envelope do not supply all static vessel metadata.
 
 ## Architecture
 
 ```text
 aisstream.io WebSocket (PositionReport only)
     -> one ingestion worker
-    -> PostGIS vessel_latest table
+    -> short report batch
+    -> upsert vessel_latest
     -> Fastify viewport API
     -> Mapbox React Native client (5-second polling while active)
 ```
@@ -35,16 +36,16 @@ Node.js, TypeScript, and Fastify serve the API. A single long-lived WebSocket co
 2. Send a complete subscription within 3 seconds, including the server-side API key, configured geographic bounding boxes, and `FilterMessageTypes: ["PositionReport"]`. The provider subscription uses **latitude, longitude** corner pairs; the client API uses **longitude, latitude** bounding-box values.
 3. Read and decode WebSocket frames continuously. Ignore subscription confirmations and other message types.
 4. For each `PositionReport`, validate the MMSI, `Valid` flag, finite latitude and longitude, and coordinate ranges. Read COG and SOG when valid; treat unavailable course as unknown rather than inventing a direction. Use the envelope's ship name when supplied.
-5. Record `received_at` as the UTC time the backend receives the valid message and upsert the latest row through a short, coalescing write batch. The AIS report's `Timestamp` is a second within a minute and is not a full event timestamp for freshness checks.
+5. Record `received_at` as the UTC time the backend receives the valid message. Queue every accepted report, then flush batches every 250 ms. Upsert only the newest report per MMSI into the latest-position table. The AIS report's `Timestamp` is a second within a minute and is not a full event timestamp for freshness checks.
 6. Reconnect with exponential backoff and jitter after disconnection, then send a new complete subscription. Log connection state and ingestion errors without exposing the API key.
 
-The provider does not promise durable replay. A restart retains rows already committed to PostgreSQL; rows older than 2 minutes remain stored but are excluded from the live API until new reports arrive.
+The provider does not promise durable replay. A restart retains rows already committed to PostgreSQL; reports still queued in memory at the moment of a crash can be lost. A prolonged database outage can fill the bounded queue and cause logged drops. Rows older than 2 minutes remain stored but are excluded from the live API until new reports arrive.
 
 ### Database
 
-Run [`database/001_init.sql`](../database/001_init.sql) and then [`database/002_retention_index.sql`](../database/002_retention_index.sql). They install PostGIS in the `gis` schema, create `app.vessel_latest` with a GiST index on its point location, and add a retention index. The `app` schema is not exposed through Supabase's Data API by default, and RLS is enabled without anon/authenticated policies. Clients access data only through Fastify.
+Run [`database/001_init.sql`](../database/001_init.sql), then [`database/002_retention_index.sql`](../database/002_retention_index.sql). They install PostGIS in the `gis` schema and create `app.vessel_latest` with spatial and freshness indexes. The table has RLS enabled without anon/authenticated policies. Clients access live data only through Fastify.
 
-Construct points as `gis.ST_SetSRID(gis.ST_MakePoint(longitude, latitude), 4326)`. Upsert by MMSI. Keep coordinates and `received_at` in the same committed update so a viewport request sees a consistent latest position. A separate append-only history table can be introduced later if trajectories become a requirement.
+Construct points as `gis.ST_SetSRID(gis.ST_MakePoint(longitude, latitude), 4326)`. Do not delete the latest row merely because it becomes stale: it must survive backend restarts. The live API hides rows older than two minutes.
 
 ### API contract
 
@@ -87,16 +88,17 @@ A five-second polling interval leaves limited margin for network and rendering t
 - Use persistent PostgreSQL/PostGIS storage and an always-on backend process for the final demonstration. A sleeping web service cannot reliably meet the 10-second update target or maintain the ingestion connection.
 - For Render to Supabase, use the Supabase **Session pooler** connection string on port 5432 as `DATABASE_URL`. Render's outbound network is IPv4-only, while Supabase's direct connection is IPv6 unless its IPv4 add-on is enabled. Keep the URL in Render environment variables, never in source control.
 - Start with one API/ingestion instance and a bounded database connection pool. Do not create one provider connection per viewer.
+- The latest table stays one row per MMSI. Monitor write delay under load.
 - Each viewer requests only its current viewport. Debounce map movement and avoid requests below zoom 12. Measure API and database load with roughly 30,000 latest rows and several concurrent viewers before adding caching or delta responses.
 - Store `AISSTREAM_API_KEY`, `AIS_BOUNDING_BOXES`, `DATABASE_URL`, and `PORT` as backend configuration. The client needs only the public API URL and its Mapbox token.
 
 ## Run and maintain the backend
 
 1. Run `yarn install --frozen-lockfile`.
-2. In the Supabase SQL Editor, run `database/001_init.sql`, then `database/002_retention_index.sql`. Run the second migration even if the first was applied previously.
+2. In the Supabase SQL Editor, run the two migrations in numeric order.
 3. Copy `.env.example` to `.env` and replace the example values. `AIS_BOUNDING_BOXES` is JSON with AISstream latitude/longitude corner pairs. Use the Supabase Session pooler URL for `DATABASE_URL`.
 4. Run `yarn dev` for automatic restarts during development. `GET /health` checks HTTP liveness; `GET /api/vessels?bbox=-80.3,25.6,-79.8,25.9` returns fresh positions in that viewport.
-5. Run `yarn typecheck`, `yarn test`, and `yarn build` before deployment. The PostGIS test requires `TEST_DATABASE_URL` pointing to an **empty disposable database** with the two SQL migrations applied; it is skipped when that variable is absent.
+5. Run `yarn typecheck`, `yarn test`, and `yarn build` before deployment. The PostGIS test requires `TEST_DATABASE_URL` pointing to an **empty disposable database** with both SQL migrations applied; it is skipped when that variable is absent.
 6. On Render, use `yarn install --frozen-lockfile && yarn build` as the build command and `yarn start` as the start command. Configure one always-on instance and set the same backend environment variables in Render.
 
 The app fails startup if the required settings are missing, the database is unreachable, or `app.vessel_latest` has not been created. `/health` is a liveness check; inspect connection and write-delay logs to diagnose ingestion health. AISstream does not replay reports missed while disconnected.
@@ -107,7 +109,7 @@ The app fails startup if the required settings are missing, the database is unre
 2. An active map shows a changed course/position within 10 seconds of backend receipt.
 3. A vessel disappears from both API results and the map after 2 minutes without a new report, including when polling fails.
 4. The map shows no vessels below zoom 12 and does not request the full worldwide dataset.
-5. Restarting the backend preserves committed vessel rows in PostgreSQL; fresh rows become available again as reports arrive.
+5. Two updates for one MMSI leave one latest row. Restarting the backend preserves that row; fresh rows become available again as reports arrive.
 6. The source code and a short demonstration video show these behaviors.
 
 ## References

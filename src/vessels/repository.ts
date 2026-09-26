@@ -14,11 +14,24 @@ interface VesselRow {
 export class PostgresVesselStore implements VesselStore {
   constructor(private readonly pool: Pool) {}
 
-  async upsertBatch(positions: VesselPosition[]): Promise<void> {
-    if (positions.length === 0) return;
-    const payload = positions.map(({ mmsi, name, longitude, latitude, speed, course, receivedAt }) => ({
-      mmsi, name, longitude, latitude, sog: speed, cog: course, received_at: receivedAt.toISOString(),
-    }));
+  async persistBatch(reports: VesselPosition[]): Promise<void> {
+    if (reports.length === 0) return;
+    const latestByMmsi = new Map<number, {
+      mmsi: number; name: string | null; longitude: number; latitude: number;
+      sog: number | null; cog: number | null; received_at: string;
+    }>();
+    for (const report of reports) {
+      const previous = latestByMmsi.get(report.mmsi);
+      latestByMmsi.set(report.mmsi, {
+        mmsi: report.mmsi,
+        name: report.name ?? previous?.name ?? null,
+        longitude: report.longitude,
+        latitude: report.latitude,
+        sog: report.speed,
+        cog: report.course,
+        received_at: report.receivedAt.toISOString(),
+      });
+    }
     await this.pool.query(`
       INSERT INTO app.vessel_latest AS existing (mmsi, name, location, sog, cog, received_at)
       SELECT incoming.mmsi, incoming.name,
@@ -35,7 +48,7 @@ export class PostgresVesselStore implements VesselStore {
         cog = EXCLUDED.cog,
         received_at = EXCLUDED.received_at
       WHERE existing.received_at <= EXCLUDED.received_at
-    `, [JSON.stringify(payload)]);
+    `, [JSON.stringify([...latestByMmsi.values()])]);
   }
 
   async listInViewport(viewport: Viewport): Promise<VesselPosition[]> {
@@ -58,8 +71,4 @@ export class PostgresVesselStore implements VesselStore {
     }));
   }
 
-  async deleteOlderThan(cutoff: Date): Promise<number> {
-    const result = await this.pool.query('DELETE FROM app.vessel_latest WHERE received_at < $1', [cutoff]);
-    return result.rowCount ?? 0;
-  }
 }

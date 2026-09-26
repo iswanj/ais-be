@@ -1,3 +1,3 @@
--- Run after 001_init.sql. Supports periodic cleanup of old latest-position rows.
+-- Run after 001_init.sql. Helps the API's two-minute freshness filter.
 CREATE INDEX IF NOT EXISTS vessel_latest_received_at_idx
   ON app.vessel_latest (received_at);

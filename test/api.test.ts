@@ -15,12 +15,11 @@ test('public API returns viewport vessels without a zoom requirement', async () 
   const now = new Date();
   let requestedViewport: Viewport | undefined;
   const store: VesselStore = {
-    async upsertBatch(_positions: VesselPosition[]) {},
+    async persistBatch() {},
     async listInViewport(viewport) {
       requestedViewport = viewport;
       return [{ mmsi: 123456789, name: null, longitude: 1, latitude: 2, speed: null, course: 90, receivedAt: now }];
     },
-    async deleteOlderThan() { return 0; },
   };
   const app = buildApp(store);
   try {

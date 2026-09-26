@@ -4,12 +4,11 @@ import { buildApp } from '../src/app.js';
 import { BatchWriter } from '../src/ais/batch-writer.js';
 import type { VesselPosition, VesselStore } from '../src/vessels/types.js';
 
-test('coalesces updates by MMSI and writes within the flush interval', async () => {
+test('keeps every update for a vessel and writes within the flush interval', async () => {
   const batches: VesselPosition[][] = [];
   const store: VesselStore = {
-    async upsertBatch(positions) { batches.push(positions); },
+    async persistBatch(reports) { batches.push(reports); },
     async listInViewport() { return []; },
-    async deleteOlderThan() { return 0; },
   };
   const app = buildApp(store);
   const writer = new BatchWriter(store, app.log);
@@ -21,24 +20,23 @@ test('coalesces updates by MMSI and writes within the flush interval', async () 
     writer.enqueue(newer);
     await waitUntil(() => batches.length > 0, 750);
     assert.equal(batches.length, 1);
-    assert.deepEqual(batches[0], [newer]);
+    assert.deepEqual(batches[0], [first, newer]);
   } finally {
     await writer.stop();
     await app.close();
   }
 });
 
-test('retries a failed batch without replacing a newer pending position', async () => {
+test('retries a failed batch without losing either location update', async () => {
   const saved: VesselPosition[] = [];
   let calls = 0;
   const store: VesselStore = {
-    async upsertBatch(positions) {
+    async persistBatch(reports) {
       calls++;
       if (calls === 1) throw new Error('temporary database failure');
-      saved.push(...positions);
+      saved.push(...reports);
     },
     async listInViewport() { return []; },
-    async deleteOlderThan() { return 0; },
   };
   const app = buildApp(store);
   const writer = new BatchWriter(store, app.log);
@@ -49,7 +47,7 @@ test('retries a failed batch without replacing a newer pending position', async 
     await writer.flush();
     writer.enqueue(newer);
     await writer.flush(true);
-    assert.deepEqual(saved, [newer]);
+    assert.deepEqual(saved, [old, newer]);
   } finally {
     await writer.stop();
     await app.close();

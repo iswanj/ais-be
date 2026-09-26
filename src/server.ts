@@ -28,22 +28,10 @@ async function main(): Promise<void> {
   writer.start();
   stream.start();
 
-  const cleanup = async () => {
-    try {
-      const deleted = await store.deleteOlderThan(new Date(Date.now() - 60 * 60 * 1_000));
-      if (deleted > 0) app.log.info({ deleted }, 'removed old vessel positions');
-    } catch (error) {
-      app.log.error({ err: error }, 'vessel cleanup failed');
-    }
-  };
-  const cleanupTimer = setInterval(() => { void cleanup(); }, 15 * 60 * 1_000);
-  void cleanup();
-
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    clearInterval(cleanupTimer);
     await stream.stop();
     await writer.stop();
     await app.close();
