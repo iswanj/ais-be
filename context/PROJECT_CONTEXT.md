@@ -33,7 +33,7 @@ Node.js, TypeScript, and Fastify serve the API. A single long-lived WebSocket co
 ### Ingestion
 
 1. Open `wss://stream.aisstream.io/v0/stream` with `permessage-deflate` enabled.
-2. Send a complete subscription within 3 seconds, including the server-side API key, geographic bounding boxes, and `FilterMessageTypes: ["PositionReport"]`. Start from `AIS_BOUNDING_BOXES` on one connection. Each viewport request remembers that location. Keep the three most recently requested viewports. A request that overlaps a watched viewport refreshes that slot instead of adding one. A fourth distinct viewport drops the least recently requested slot. Send a replacement subscription at most once per second; it replaces the previous set. The provider subscription uses **latitude, longitude** corner pairs; the client API uses **longitude, latitude** bounding-box values. The vessel response still returns immediately with rows already stored for that viewport.
+2. Send a complete subscription within 3 seconds, including the server-side API key, the `AIS_BOUNDING_BOXES` coverage, and `FilterMessageTypes: ["PositionReport"]`. Use one worldwide box, `[[[90,-180],[-90,180]]]`, so every viewer can query any area from the same stored data. The provider subscription uses **latitude, longitude** corner pairs; the client API uses **longitude, latitude** bounding-box values.
 3. Read and decode WebSocket frames continuously. Ignore subscription confirmations and other message types.
 4. For each `PositionReport`, validate the MMSI, `Valid` flag, finite latitude and longitude, and coordinate ranges. Read COG and SOG when valid; treat unavailable course as unknown rather than inventing a direction. Use the envelope's ship name when supplied.
 5. Record `received_at` as the UTC time the backend receives the valid message. Queue every accepted report, then flush batches every 250 ms. Upsert only the newest report per MMSI into the latest-position table. The AIS report's `Timestamp` is a second within a minute and is not a full event timestamp for freshness checks.
@@ -90,7 +90,7 @@ A five-second polling interval leaves limited margin for network and rendering t
 - Start with one API/ingestion instance and a bounded database connection pool. Do not create one provider connection per viewer.
 - The latest table stays one row per MMSI. Monitor write delay under load.
 - Each viewer requests only its current viewport. Debounce map movement and avoid requests below zoom 12. Measure API and database load with roughly 30,000 latest rows and several concurrent viewers before adding caching or delta responses.
-- Store `AISSTREAM_API_KEY`, `AIS_BOUNDING_BOXES`, `DATABASE_URL`, and `PORT` as backend configuration. `AIS_BOUNDING_BOXES` is the coverage used until a map request arrives. The client needs only the public API URL and its Mapbox token.
+- Store `AISSTREAM_API_KEY`, `AIS_BOUNDING_BOXES`, `DATABASE_URL`, and `PORT` as backend configuration. The client needs only the public API URL and its Mapbox token.
 
 ## Run and maintain the backend
 

@@ -40,6 +40,10 @@ test('requires configuration and validates provider bounding boxes', () => {
     AIS_BOUNDING_BOXES: '[[[25.835,-80.208],[25.603,-79.879]]]',
   };
   assert.equal(loadConfig(env).aisBoundingBoxes.length, 1);
+  assert.deepEqual(
+    loadConfig({ ...env, AIS_BOUNDING_BOXES: '[[[90,-180],[-90,180]]]' }).aisBoundingBoxes,
+    [[[90, -180], [-90, 180]]],
+  );
   assert.throws(() => loadConfig({ ...env, AISSTREAM_API_KEY: '' }), /AISSTREAM_API_KEY/);
   assert.throws(() => loadConfig({ ...env, AIS_BOUNDING_BOXES: '[[[91,0],[0,1]]]' }), /AIS_BOUNDING_BOXES/);
 });

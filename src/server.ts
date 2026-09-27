@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import { ViewportCoverage } from './ais/coverage.js';
 import { AisStreamClient } from './ais/stream-client.js';
 import { BatchWriter } from './ais/batch-writer.js';
 import { buildApp } from './app.js';
@@ -11,16 +10,8 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const pool = createPool(config.databaseUrl);
   const store = new PostgresVesselStore(pool);
-  const coverage = new ViewportCoverage(config.aisBoundingBoxes);
-  let stream: AisStreamClient | undefined;
-  const app = buildApp(store, (viewport) => {
-    if (coverage.watch(viewport)) stream?.updateBoundingBoxes(coverage.boxes());
-  });
+  const app = buildApp(store);
   pool.on('error', (error) => app.log.error({ err: error }, 'idle database client error'));
-
-  const writer = new BatchWriter(store, app.log);
-  const activeStream = new AisStreamClient(config.aisstreamApiKey, coverage.boxes(), writer, app.log);
-  stream = activeStream;
 
   try {
     await pool.query('SELECT mmsi FROM app.vessel_latest LIMIT 0');
@@ -32,14 +23,16 @@ async function main(): Promise<void> {
     throw error;
   }
 
+  const writer = new BatchWriter(store, app.log);
+  const stream = new AisStreamClient(config.aisstreamApiKey, config.aisBoundingBoxes, writer, app.log);
   writer.start();
-  activeStream.start();
+  stream.start();
 
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await activeStream.stop();
+    await stream.stop();
     await writer.stop();
     await app.close();
     await pool.end();

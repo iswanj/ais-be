@@ -21,12 +21,10 @@ test('public API returns viewport vessels without a zoom requirement', async () 
       return [{ mmsi: 123456789, name: null, longitude: 1, latitude: 2, speed: null, course: 90, receivedAt: now }];
     },
   };
-  const watched: Viewport[] = [];
-  const app = buildApp(store, (viewport) => { watched.push(viewport); });
+  const app = buildApp(store);
   try {
     const response = await app.inject('/api/vessels?bbox=0,0,2,3');
     assert.equal(response.statusCode, 200);
-    assert.deepEqual(watched, [{ minLng: 0, minLat: 0, maxLng: 2, maxLat: 3 }]);
     assert.equal(response.headers['cache-control'], 'no-store');
     assert.deepEqual(requestedViewport, { minLng: 0, minLat: 0, maxLng: 2, maxLat: 3 });
     assert.deepEqual(response.json(), { data: [{
@@ -34,7 +32,6 @@ test('public API returns viewport vessels without a zoom requirement', async () 
       speed: null, course: 90, receivedAt: now.toISOString(),
     }] });
     assert.equal((await app.inject('/api/vessels?bbox=0,0,20,3')).statusCode, 400);
-    assert.equal(watched.length, 1);
     assert.equal((await app.inject('/health')).statusCode, 200);
   } finally {
     await app.close();
