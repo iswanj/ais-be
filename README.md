@@ -5,7 +5,7 @@ Ingests AIS `PositionReport` messages for the whole world from [aisstream.io](ht
 ```text
 aisstream.io WebSocket (worldwide, PositionReport only)
   -> 250 ms batches -> upsert app.vessel_latest (one row per MMSI)
-  -> GET /api/vessels?bbox=minLng,minLat,maxLng,maxLat
+  -> GET /api/vessels?bbox=... (snapshot) and GET /api/vessels/stream?bbox=... (live)
 ```
 
 ## API
@@ -29,6 +29,10 @@ aisstream.io WebSocket (worldwide, PositionReport only)
 ```
 
 `GET /health` returns `{ "status": "ok" }`.
+
+`GET /api/vessels/stream?bbox=...` is a Server-Sent Events connection. The first event is `snapshot` with the same `{ "data": [...] }` payload. Later `upsert` events contain only vessels from a write batch that fall inside that viewport. Comment heartbeats keep the proxy from closing an idle stream.
+
+Use one always-on instance. Subscribers live in that process's memory.
 
 ## Run locally
 

@@ -13,7 +13,11 @@ export class BatchWriter {
   private dropped = 0;
   private retryAfter = 0;
 
-  constructor(private readonly store: VesselStore, private readonly logger: FastifyBaseLogger) {}
+  constructor(
+    private readonly store: VesselStore,
+    private readonly logger: FastifyBaseLogger,
+    private readonly onPersisted?: (reports: VesselPosition[]) => void,
+  ) {}
 
   start(): void {
     if (this.timer) return;
@@ -53,6 +57,7 @@ export class BatchWriter {
       try {
         await this.store.persistBatch(batch);
         this.retryAfter = 0;
+        this.onPersisted?.(batch);
         const oldestDelayMs = Date.now() - Math.min(...batch.map((item) => item.receivedAt.getTime()));
         if (oldestDelayMs > 1_000) {
           this.logger.warn({ count: batch.length, pending: this.pending.length, oldestDelayMs }, 'AIS write delay exceeded one second');

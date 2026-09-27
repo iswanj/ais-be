@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildApp } from '../src/app.js';
 import { BatchWriter } from '../src/ais/batch-writer.js';
+import { ViewportHub } from '../src/vessels/hub.js';
 import type { VesselPosition, VesselStore } from '../src/vessels/types.js';
 
 test('keeps every update for a vessel and writes within the flush interval', async () => {
@@ -10,7 +11,7 @@ test('keeps every update for a vessel and writes within the flush interval', asy
     async persistBatch(reports) { batches.push(reports); },
     async listInViewport() { return []; },
   };
-  const app = buildApp(store);
+  const app = buildApp(store, new ViewportHub());
   const writer = new BatchWriter(store, app.log);
   const first = { mmsi: 123456789, name: null, longitude: 1, latitude: 2, speed: 1, course: 90, receivedAt: new Date() };
   const newer = { ...first, longitude: 3, receivedAt: new Date(first.receivedAt.getTime() + 1) };
@@ -38,7 +39,7 @@ test('retries a failed batch without losing either location update', async () =>
     },
     async listInViewport() { return []; },
   };
-  const app = buildApp(store);
+  const app = buildApp(store, new ViewportHub());
   const writer = new BatchWriter(store, app.log);
   const old = { mmsi: 123456789, name: null, longitude: 1, latitude: 2, speed: null, course: null, receivedAt: new Date() };
   const newer = { ...old, longitude: 3, receivedAt: new Date(old.receivedAt.getTime() + 1) };
@@ -48,6 +49,25 @@ test('retries a failed batch without losing either location update', async () =>
     writer.enqueue(newer);
     await writer.flush(true);
     assert.deepEqual(saved, [old, newer]);
+  } finally {
+    await writer.stop();
+    await app.close();
+  }
+});
+
+test('publishes a persisted batch to the viewport hub', async () => {
+  const published: VesselPosition[][] = [];
+  const store: VesselStore = {
+    async persistBatch() {},
+    async listInViewport() { return []; },
+  };
+  const app = buildApp(store, new ViewportHub());
+  const writer = new BatchWriter(store, app.log, (reports) => published.push(reports));
+  const report = { mmsi: 123456789, name: null, longitude: 1, latitude: 2, speed: null, course: null, receivedAt: new Date() };
+  try {
+    writer.enqueue(report);
+    await writer.flush(true);
+    assert.deepEqual(published, [[report]]);
   } finally {
     await writer.stop();
     await app.close();

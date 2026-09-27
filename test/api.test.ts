@@ -3,6 +3,7 @@ import test from 'node:test';
 import { buildApp } from '../src/app.js';
 import type { VesselPosition, VesselStore, Viewport } from '../src/vessels/types.js';
 import { parseViewport } from '../src/vessels/viewport.js';
+import { ViewportHub } from '../src/vessels/hub.js';
 
 test('validates regular and antimeridian viewports', () => {
   assert.deepEqual(parseViewport('179,-1,-179,1'), { minLng: 179, minLat: -1, maxLng: -179, maxLat: 1 });
@@ -21,7 +22,7 @@ test('public API returns viewport vessels without a zoom requirement', async () 
       return [{ mmsi: 123456789, name: null, longitude: 1, latitude: 2, speed: null, course: 90, receivedAt: now }];
     },
   };
-  const app = buildApp(store);
+  const app = buildApp(store, new ViewportHub());
   try {
     const response = await app.inject('/api/vessels?bbox=0,0,2,3');
     assert.equal(response.statusCode, 200);
@@ -32,6 +33,7 @@ test('public API returns viewport vessels without a zoom requirement', async () 
       speed: null, course: 90, receivedAt: now.toISOString(),
     }] });
     assert.equal((await app.inject('/api/vessels?bbox=0,0,20,3')).statusCode, 400);
+    assert.equal((await app.inject('/api/vessels/stream?bbox=0,0,20,3')).statusCode, 400);
     assert.equal((await app.inject('/health')).statusCode, 200);
 
     const etag = response.headers.etag;
@@ -43,6 +45,44 @@ test('public API returns viewport vessels without a zoom requirement', async () 
     assert.equal(unchanged.statusCode, 304);
     assert.equal(unchanged.body, '');
   } finally {
+    await app.close();
+  }
+});
+
+test('vessel stream sends a snapshot from the viewport query', async () => {
+  const now = new Date();
+  let snapshots = 0;
+  const store: VesselStore = {
+    async persistBatch() {},
+    async listInViewport() {
+      snapshots++;
+      return [{ mmsi: 123456789, name: null, longitude: 1, latitude: 2, speed: null, course: 90, receivedAt: now }];
+    },
+  };
+  const app = buildApp(store, new ViewportHub());
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const address = app.server.address();
+  if (!address || typeof address === 'string') throw new Error('no listening port');
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/vessels/stream?bbox=0,0,2,3`, {
+      signal: controller.signal,
+    });
+    assert.equal(response.status, 200);
+    assert.match(String(response.headers.get('content-type')), /text\/event-stream/);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('stream has no body');
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (!buffer.includes('event: snapshot')) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('stream ended before snapshot');
+      buffer += decoder.decode(value, { stream: true });
+    }
+    assert.match(buffer, /123456789/);
+    assert.equal(snapshots, 1);
+  } finally {
+    controller.abort();
     await app.close();
   }
 });

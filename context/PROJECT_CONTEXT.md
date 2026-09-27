@@ -10,7 +10,7 @@ The challenge prioritizes a simple implementation that remains useful with appro
 
 - Ingest only aisstream.io `PositionReport` messages.
 - Keep one durable latest-position record per MMSI in PostgreSQL with PostGIS.
-- Expose fresh positions for the requested viewport through a REST API.
+- Expose fresh positions for the requested viewport through REST and an SSE stream.
 - Keep the aisstream.io API key on the backend.
 - Recover the stream connection after interruptions without losing already persisted positions.
 - Support a demonstration of ingestion, map updates, freshness, and persistence after a backend restart.
@@ -24,8 +24,8 @@ aisstream.io WebSocket (PositionReport only)
     -> one ingestion worker
     -> short report batch
     -> upsert vessel_latest
-    -> Fastify viewport API
-    -> Mapbox React Native client (5-second polling while active)
+    -> Fastify viewport REST snapshot and SSE stream
+    -> Mapbox React Native client (one EventSource per viewport)
 ```
 
 Node.js, TypeScript, and Fastify serve the API. A single long-lived WebSocket consumer runs alongside the API for the initial one-instance deployment. If the API is later scaled to multiple instances, run the consumer as a separate singleton worker so replicas do not open duplicate provider subscriptions.
@@ -75,13 +75,15 @@ Example response:
 }
 ```
 
+`GET /api/vessels/stream?bbox=minLng,minLat,maxLng,maxLat` uses the same viewport rules. It sends one `snapshot` event from `listInViewport`, then `upsert` events for reports that land in that viewport after a write batch. Comment heartbeats keep the connection open. One always-on process holds subscribers in memory.
+
 `GET /health` provides a basic liveness response. Connection, queue, and database failures are logged so a running HTTP server does not hide a disconnected feed.
 
 ## Mobile integration contract
 
-The client uses `@rnmapbox/maps` (with an Expo custom development build if using Expo). At zoom 12 or higher, it polls the current viewport every 5 seconds while the app and map are active, and refetches after a settled pan or zoom. It renders GeoJSON points in a `ShapeSource` with a `SymbolLayer`, rotating a directional icon by `course`. It clears markers below zoom 12, removes markers outside the current viewport, and expires locally cached positions after 2 minutes even if a request fails. Keep the aisstream.io key out of the client.
+The client uses `@rnmapbox/maps` (with an Expo custom development build if using Expo). At zoom 12 or higher, it opens one SSE connection for the current viewport while the app and map are active, and reconnects after a settled pan or zoom. It renders GeoJSON points in a `ShapeSource` with a `SymbolLayer`, rotating a directional icon by `course`. It clears markers below zoom 12, removes markers outside the current viewport, and expires locally cached positions after 2 minutes even if the stream fails. Keep the aisstream.io key out of the client.
 
-A five-second polling interval leaves limited margin for network and rendering time. Measure latency from backend `received_at` to visible map update; adjust the interval or API performance if the 10-second requirement is missed.
+A snapshot plus upserts after each 250 ms write batch should appear on an active map within 10 seconds of backend receipt.
 
 ## Deployment and scaling
 

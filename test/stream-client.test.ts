@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import { buildApp } from '../src/app.js';
 import { BatchWriter } from '../src/ais/batch-writer.js';
 import { AisStreamClient } from '../src/ais/stream-client.js';
+import { ViewportHub } from '../src/vessels/hub.js';
 import type { VesselPosition, VesselStore } from '../src/vessels/types.js';
 
 test('subscribes, accepts positions, and reconnects after a close', async () => {
@@ -38,7 +39,7 @@ test('subscribes, accepts positions, and reconnects after a close', async () => 
       return [...latest.values()];
     },
   };
-  const app = buildApp(store);
+  const app = buildApp(store, new ViewportHub());
   const writer = new BatchWriter(store, app.log);
   const client = new AisStreamClient(
     'test-key', [[[2, 1], [0, 3]]], { enqueue: (position) => { positions.push(position); writer.enqueue(position); } },

@@ -1,4 +1,12 @@
-import type { Viewport } from './types.js';
+import type { VesselPosition, Viewport } from './types.js';
+
+export function viewportContains(viewport: Viewport, longitude: number, latitude: number): boolean {
+  if (latitude < viewport.minLat || latitude > viewport.maxLat) return false;
+  if (viewport.minLng <= viewport.maxLng) {
+    return longitude >= viewport.minLng && longitude <= viewport.maxLng;
+  }
+  return longitude >= viewport.minLng || longitude <= viewport.maxLng;
+}
 
 export function parseViewport(value: unknown): Viewport | null {
   if (typeof value !== 'string') return null;
@@ -12,4 +20,10 @@ export function parseViewport(value: unknown): Viewport | null {
   const longitudeSpan = minLng < maxLng ? maxLng - minLng : 360 - minLng + maxLng;
   if (longitudeSpan <= 0 || longitudeSpan > 10 || maxLat - minLat > 10) return null;
   return { minLng, minLat, maxLng, maxLat };
+}
+
+export function toPublicVessels(vessels: VesselPosition[]) {
+  return vessels.map(({ receivedAt, ...position }) => ({
+    ...position, receivedAt: receivedAt.toISOString(),
+  }));
 }

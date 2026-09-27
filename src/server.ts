@@ -4,13 +4,15 @@ import { BatchWriter } from './ais/batch-writer.js';
 import { buildApp } from './app.js';
 import { loadConfig } from './config/env.js';
 import { createPool } from './db/pool.js';
+import { ViewportHub } from './vessels/hub.js';
 import { PostgresVesselStore } from './vessels/repository.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const pool = createPool(config.databaseUrl);
   const store = new PostgresVesselStore(pool);
-  const app = buildApp(store);
+  const hub = new ViewportHub();
+  const app = buildApp(store, hub);
   pool.on('error', (error) => app.log.error({ err: error }, 'idle database client error'));
 
   try {
@@ -23,7 +25,7 @@ async function main(): Promise<void> {
     throw error;
   }
 
-  const writer = new BatchWriter(store, app.log);
+  const writer = new BatchWriter(store, app.log, (reports) => hub.publish(reports));
   const stream = new AisStreamClient(config.aisstreamApiKey, config.aisBoundingBoxes, writer, app.log);
   writer.start();
   stream.start();
