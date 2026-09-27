@@ -1,12 +1,12 @@
 import Fastify from 'fastify';
-import type { VesselStore } from './vessels/types.js';
+import type { VesselStore, Viewport } from './vessels/types.js';
 import { registerVesselRoutes } from './vessels/routes.js';
 
-export function buildApp(store: VesselStore) {
+export function buildApp(store: VesselStore, onViewport?: (viewport: Viewport) => void) {
   const app = Fastify({ logger: true });
 
   app.get('/health', async () => ({ status: 'ok' }));
-  registerVesselRoutes(app, store);
+  registerVesselRoutes(app, store, onViewport);
 
   return app;
 }

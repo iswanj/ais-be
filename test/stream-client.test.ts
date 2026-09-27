@@ -67,6 +67,41 @@ test('subscribes, accepts positions, and reconnects after a close', async () => 
   }
 });
 
+test('replaces bounding boxes on the same connection and coalesces rapid updates', async () => {
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  if (typeof address === 'string' || !address) throw new Error('mock server has no port');
+  const subscriptions: Array<{ BoundingBoxes: unknown }> = [];
+  let connections = 0;
+  server.on('connection', (socket) => {
+    connections++;
+    socket.on('message', (data) => {
+      subscriptions.push(JSON.parse(data.toString()) as { BoundingBoxes: unknown });
+    });
+  });
+  const app = buildApp({ async persistBatch() {}, async listInViewport() { return []; } });
+  const client = new AisStreamClient(
+    'test-key', [[[2, 1], [0, 3]]], { enqueue() {} }, app.log, `ws://127.0.0.1:${address.port}`, 10, 200,
+  );
+  try {
+    client.start();
+    await waitUntil(() => subscriptions.length === 1, 2_000);
+    client.updateBoundingBoxes([[[4, 5], [2, 7]]]);
+    client.updateBoundingBoxes([[[8, 9], [6, 11]]]);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(subscriptions.length, 1);
+    assert.equal(connections, 1);
+    await waitUntil(() => subscriptions.length === 2, 1_000);
+    assert.deepEqual(subscriptions[1]?.BoundingBoxes, [[[8, 9], [6, 11]]]);
+    assert.equal(connections, 1);
+  } finally {
+    await client.stop();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await app.close();
+  }
+});
+
 async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
