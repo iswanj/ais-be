@@ -1,3 +1,5 @@
+import { parseDatabaseUrl } from './database-url.js';
+
 export type BoundingBox = [[number, number], [number, number]];
 
 export interface Config {
@@ -9,19 +11,8 @@ export interface Config {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const aisstreamApiKey = env.AISSTREAM_API_KEY?.trim();
-  const databaseUrl = env.DATABASE_URL?.trim();
   if (!aisstreamApiKey) throw new Error('AISSTREAM_API_KEY is required');
-  if (!databaseUrl) throw new Error('DATABASE_URL is required');
-
-  let url: URL;
-  try {
-    url = new URL(databaseUrl);
-  } catch {
-    throw new Error('DATABASE_URL must be a PostgreSQL connection URL');
-  }
-  if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
-    throw new Error('DATABASE_URL must be a PostgreSQL connection URL');
-  }
+  const databaseUrl = parseDatabaseUrl(env.DATABASE_URL);
 
   let boxes: unknown;
   try {

@@ -77,7 +77,7 @@ Example response:
 
 `GET /api/vessels/stream?bbox=minLng,minLat,maxLng,maxLat` uses the same viewport rules. It sends one `snapshot` event from `listInViewport`, then `upsert` events for reports that land in that viewport after a write batch. Comment heartbeats keep the connection open. One always-on process holds subscribers in memory.
 
-`GET /health` provides a basic liveness response. Connection, queue, and database failures are logged so a running HTTP server does not hide a disconnected feed.
+`GET /health` and `GET /ready` ping Postgres. They return 503 when the database is unreachable so a process that cannot serve vessels is not treated as healthy.
 
 ## Mobile integration contract
 
@@ -99,11 +99,11 @@ A snapshot plus upserts after each 250 ms write batch should appear on an active
 1. Run `yarn install --frozen-lockfile`.
 2. Copy `.env.example` to `.env` and replace the example values. `AIS_BOUNDING_BOXES` is JSON with AISstream latitude/longitude corner pairs. Use the Supabase Session pooler URL for `DATABASE_URL`.
 3. Run `yarn migrate`. It applies new files in `database/` in numeric order.
-4. Run `yarn dev` for automatic restarts during development. `GET /health` checks HTTP liveness; `GET /api/vessels?bbox=103.720,1.200,103.880,1.270` returns fresh positions in the Singapore Harbor viewport.
+4. Run `yarn dev` for automatic restarts during development. `GET /health` and `GET /ready` ping Postgres; `GET /api/vessels?bbox=103.720,1.200,103.880,1.270` returns fresh positions in the Singapore Harbor viewport.
 5. Run `yarn typecheck`, `yarn test`, and `yarn build` before deployment. The PostGIS test requires `TEST_DATABASE_URL` pointing to an **empty disposable database** with `yarn migrate` already applied; it is skipped when that variable is absent.
 6. On Render, use `yarn install --frozen-lockfile && yarn build` as the build command and `yarn start` as the start command. Configure one always-on instance and set the same backend environment variables in Render.
 
-The app fails startup if the required settings are missing, the database is unreachable, or `app.vessel_latest` has not been created. `/health` is a liveness check; inspect connection and write-delay logs to diagnose ingestion health. AISstream does not replay reports missed while disconnected.
+The app fails startup if the required settings are missing, the database is unreachable, or `app.vessel_latest` has not been created. `/health` and `/ready` ping Postgres. Inspect connection and write-delay logs to diagnose ingestion health. AISstream does not replay reports missed while disconnected.
 
 ## Delivery and acceptance checks
 

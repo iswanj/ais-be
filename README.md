@@ -28,11 +28,11 @@ aisstream.io WebSocket (worldwide, PositionReport only)
 }
 ```
 
-`GET /health` returns `{ "status": "ok" }`.
+`GET /health` and `GET /ready` return `{ "status": "ok" }` after a database ping. They return 503 when Postgres is unreachable.
 
-`GET /api/vessels/stream?bbox=...` is a Server-Sent Events connection. The first event is `snapshot` with the same `{ "data": [...] }` payload. Later `upsert` events contain only vessels from a write batch that fall inside that viewport. Comment heartbeats keep the proxy from closing an idle stream.
+`GET /api/vessels/stream?bbox=...` is a Server-Sent Events connection. The first event is `snapshot` with the same `{ "data": [...] }` payload. Later `upsert` events contain only vessels from a write batch that fall inside that viewport. Comment heartbeats keep the proxy from closing an idle stream. The process keeps at most 200 live viewers.
 
-Use one always-on instance. Subscribers live in that process's memory.
+Use one always-on instance. Subscribers live in that process's memory. Shutdown ends every open stream.
 
 ## Run locally
 

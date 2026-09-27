@@ -12,7 +12,10 @@ async function main(): Promise<void> {
   const pool = createPool(config.databaseUrl);
   const store = new PostgresVesselStore(pool);
   const hub = new ViewportHub();
-  const app = buildApp(store, hub);
+  const ping = async () => {
+    await pool.query('SELECT 1');
+  };
+  const app = buildApp(store, hub, ping);
   pool.on('error', (error) => app.log.error({ err: error }, 'idle database client error'));
 
   try {

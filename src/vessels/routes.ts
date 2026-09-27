@@ -2,14 +2,22 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ifNoneMatchContains, vesselCollectionEtag } from './etag.js';
 import type { ViewportHub } from './hub.js';
 import { SSE_KEEPALIVE_MS, sseComment, sseEvent, sseHeaders, writeSse } from './sse.js';
-import type { VesselPosition, VesselStore, Viewport } from './types.js';
+import type { VesselPosition, VesselStore } from './types.js';
 import { parseViewport, toPublicVessels } from './viewport.js';
+
+const VIEWER_LIMIT_MESSAGE = 'Too many live viewers; try again shortly';
 
 export function registerVesselRoutes(
   app: FastifyInstance,
   store: VesselStore,
   hub: ViewportHub,
 ): void {
+  const streams = new Set<() => void>();
+  app.addHook('onClose', async () => {
+    for (const close of streams) close();
+    streams.clear();
+  });
+
   app.get('/api/vessels', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const viewport = parseViewport((request.query as Record<string, unknown>).bbox);
@@ -36,6 +44,9 @@ export function registerVesselRoutes(
     if (!viewport) {
       return reply.code(400).send({ error: 'bbox must be minLng,minLat,maxLng,maxLat within a 10-degree viewport' });
     }
+    if (hub.isFull()) {
+      return reply.code(503).send({ error: VIEWER_LIMIT_MESSAGE });
+    }
 
     let vessels;
     try {
@@ -45,15 +56,22 @@ export function registerVesselRoutes(
       return reply.code(503).send({ error: 'Vessel data is temporarily unavailable' });
     }
 
-    openVesselStream(request, reply, hub, viewport, vessels);
+    const unsubscribe = hub.subscribe(viewport, (reports) => {
+      writeSse(reply.raw, sseEvent('upsert', { data: toPublicVessels(reports) }));
+    });
+    if (!unsubscribe) {
+      return reply.code(503).send({ error: VIEWER_LIMIT_MESSAGE });
+    }
+
+    openVesselStream(request, reply, streams, unsubscribe, vessels);
   });
 }
 
 function openVesselStream(
   request: FastifyRequest,
   reply: FastifyReply,
-  hub: ViewportHub,
-  viewport: Viewport,
+  streams: Set<() => void>,
+  unsubscribe: () => void,
   vessels: VesselPosition[],
 ): void {
   reply.hijack();
@@ -61,9 +79,6 @@ function openVesselStream(
   reply.raw.writeHead(200, sseHeaders());
   writeSse(reply.raw, sseEvent('snapshot', { data: toPublicVessels(vessels) }));
 
-  const unsubscribe = hub.subscribe(viewport, (reports) => {
-    writeSse(reply.raw, sseEvent('upsert', { data: toPublicVessels(reports) }));
-  });
   const heartbeat = setInterval(() => {
     if (!writeSse(reply.raw, sseComment('keepalive'))) close();
   }, SSE_KEEPALIVE_MS);
@@ -74,9 +89,12 @@ function openVesselStream(
     closed = true;
     clearInterval(heartbeat);
     unsubscribe();
+    streams.delete(close);
     if (!reply.raw.writableEnded) reply.raw.end();
+    if (!request.raw.destroyed) request.raw.destroy();
   };
 
+  streams.add(close);
   request.raw.on('close', close);
   request.raw.on('error', close);
 }

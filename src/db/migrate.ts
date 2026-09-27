@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
+import { parseDatabaseUrl } from '../config/database-url.js';
 
 const databaseDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../database');
 
@@ -16,18 +17,7 @@ export function pendingMigrations(files: readonly string[], applied: readonly st
 }
 
 export function databaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const urlValue = env.DATABASE_URL?.trim();
-  if (!urlValue) throw new Error('DATABASE_URL is required');
-  let url: URL;
-  try {
-    url = new URL(urlValue);
-  } catch {
-    throw new Error('DATABASE_URL must be a PostgreSQL connection URL');
-  }
-  if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
-    throw new Error('DATABASE_URL must be a PostgreSQL connection URL');
-  }
-  return urlValue;
+  return parseDatabaseUrl(env.DATABASE_URL);
 }
 
 export async function applyMigrations(client: Client, directory: string): Promise<string[]> {

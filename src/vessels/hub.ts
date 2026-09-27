@@ -3,10 +3,23 @@ import { viewportContains } from './viewport.js';
 
 export type VesselListener = (reports: VesselPosition[]) => void;
 
+export const DEFAULT_MAX_SUBSCRIBERS = 200;
+
 export class ViewportHub {
   private readonly subscribers = new Map<symbol, { viewport: Viewport; send: VesselListener }>();
 
-  subscribe(viewport: Viewport, send: VesselListener): () => void {
+  constructor(private readonly maxSubscribers = DEFAULT_MAX_SUBSCRIBERS) {}
+
+  get size(): number {
+    return this.subscribers.size;
+  }
+
+  isFull(): boolean {
+    return this.subscribers.size >= this.maxSubscribers;
+  }
+
+  subscribe(viewport: Viewport, send: VesselListener): (() => void) | null {
+    if (this.isFull()) return null;
     const id = Symbol('viewport-subscriber');
     this.subscribers.set(id, { viewport, send });
     return () => { this.subscribers.delete(id); };

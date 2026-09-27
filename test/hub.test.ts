@@ -15,6 +15,7 @@ test('sends only reports inside a subscriber viewport and stops after unsubscrib
   const unsubscribe = hub.subscribe({ minLng: 0, minLat: 0, maxLng: 2, maxLat: 2 }, (reports) => {
     received.push(reports);
   });
+  if (!unsubscribe) throw new Error('expected subscribe to succeed');
 
   hub.publish([inside, outside]);
   assert.deepEqual(received, [[inside]]);
@@ -32,4 +33,14 @@ test('delivers a report on either side of an antimeridian viewport', () => {
   });
   hub.publish([dateline, outside]);
   assert.deepEqual(received, [[dateline]]);
+});
+
+test('refuses a new subscriber when the hub is full', () => {
+  const hub = new ViewportHub(1);
+  const first = hub.subscribe({ minLng: 0, minLat: 0, maxLng: 1, maxLat: 1 }, () => {});
+  if (!first) throw new Error('expected first subscribe to succeed');
+  assert.equal(hub.isFull(), true);
+  assert.equal(hub.subscribe({ minLng: 0, minLat: 0, maxLng: 1, maxLat: 1 }, () => {}), null);
+  first();
+  assert.equal(hub.isFull(), false);
 });
