@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { ifNoneMatchContains, vesselCollectionEtag } from './etag.js';
 import type { VesselStore } from './types.js';
 import { parseViewport } from './viewport.js';
 
@@ -13,6 +14,11 @@ export function registerVesselRoutes(app: FastifyInstance, store: VesselStore): 
 
     try {
       const vessels = await store.listInViewport(viewport);
+      const etag = vesselCollectionEtag(vessels);
+      reply.header('ETag', etag);
+      if (ifNoneMatchContains(request.headers['if-none-match'], etag)) {
+        return reply.code(304).send();
+      }
       return { data: vessels.map(({ receivedAt, ...position }) => ({
         ...position, receivedAt: receivedAt.toISOString(),
       })) };

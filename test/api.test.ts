@@ -33,6 +33,15 @@ test('public API returns viewport vessels without a zoom requirement', async () 
     }] });
     assert.equal((await app.inject('/api/vessels?bbox=0,0,20,3')).statusCode, 400);
     assert.equal((await app.inject('/health')).statusCode, 200);
+
+    const etag = response.headers.etag;
+    assert.equal(typeof etag, 'string');
+    const unchanged = await app.inject({
+      url: '/api/vessels?bbox=0,0,2,3',
+      headers: { 'if-none-match': String(etag) },
+    });
+    assert.equal(unchanged.statusCode, 304);
+    assert.equal(unchanged.body, '');
   } finally {
     await app.close();
   }

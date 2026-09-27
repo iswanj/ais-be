@@ -55,7 +55,7 @@ Construct points as `gis.ST_SetSRID(gis.ST_MakePoint(longitude, latitude), 4326)
 - Validate numeric values, latitude/longitude ranges, latitude ordering, and a maximum 10-degree span in each direction. A box crossing the antimeridian (`minLng > maxLng`) is split into two spatial queries.
 - The API has no zoom parameter. The client suppresses fetching and clears markers below zoom 12.
 - Query `app.vessel_latest` for only `received_at >= NOW() - INTERVAL '2 minutes'` and locations intersecting the requested viewport. Use `gis.ST_Intersects(location, gis.ST_MakeEnvelope(..., 4326))` with the GiST index.
-- Return one item per MMSI. `course` is COG in degrees, or `null` when unavailable.
+- Return one item per MMSI. `course` is COG in degrees, or `null` when unavailable. Send an `ETag` of the current MMSI and `receivedAt` set. A matching `If-None-Match` returns `304` so a client can keep its last payload when the viewport has not changed.
 
 Example response:
 
